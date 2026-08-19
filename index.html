@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>QR受付</title>
-  <!-- iOS Safariで最も安定して動作するjsQRライブラリ -->
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
   <style>
     body { font-family: sans-serif; text-align: center; background: #f0f2f5; margin: 0; padding: 20px; }
@@ -23,7 +22,7 @@
   <div id="status">カメラを起動中...</div>
 
   <script>
-    // ⚠️【必須】ここにご自身のGASのURLを入れてください
+    // ⚠️【必須】ご自身のGASのURL（/execで終わるもの）を入れてください
     const GAS_URL = "https://script.google.com/a/macros/shizuokaonline.com/s/AKfycbx8mmGtAQc6CWur3_NmQVHZ7V1oaAWb7JBA0QiCm_ThWB604tLjjY0GJCy5zbotld8p/exec";
 
     const video = document.getElementById("video");
@@ -32,17 +31,15 @@
     const statusDiv = document.getElementById("status");
     let isProcessing = false;
 
-    // iPadの背面カメラを強制起動
     navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
       .then(stream => {
         video.srcObject = stream;
-        video.setAttribute("playsinline", true); // iOSで全画面化を防ぐ必須設定
+        video.setAttribute("playsinline", true);
         video.play();
         requestAnimationFrame(tick);
         statusDiv.innerText = "かざしてください";
       })
-      .catch(err => {
-        // 前面カメラでリトライ
+      .catch(() => {
         navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
           .then(stream => {
             video.srcObject = stream;
@@ -51,12 +48,9 @@
             requestAnimationFrame(tick);
             statusDiv.innerText = "かざしてください";
           })
-          .catch(e => {
-            statusDiv.innerText = "カメラの起動に失敗しました";
-          });
+          .catch(() => { statusDiv.innerText = "カメラの起動に失敗しました"; });
       });
 
-    // 毎フレーム画像を解析する処理
     function tick() {
       if (video.readyState === video.HAVE_ENOUGH_DATA) {
         canvas.height = video.videoHeight;
@@ -65,53 +59,61 @@
         
         if (!isProcessing) {
           const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const code = jsQR(imageData.data, imageData.width, imageData.height, {
-            inversionAttempts: "dontInvert",
-          });
-
-          // QRコードを検知した場合
-          if (code && code.data) {
-            onScan(code.data);
-          }
+          const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
+          if (code && code.data) onScan(code.data);
         }
       }
       requestAnimationFrame(tick);
     }
 
-    // データ送信処理
+    // JSONP通信（iOSのCORSブロックを回避）
     function onScan(qrData) {
       isProcessing = true;
       statusDiv.className = "";
       statusDiv.innerText = "検知しました！照合中...";
 
-      fetch(GAS_URL + "?qrData=" + encodeURIComponent(qrData))
-        .then(res => res.json())
-        .then(data => {
-          if (data.success) {
-            statusDiv.className = "success";
-            statusDiv.innerHTML = "⭕ 受付完了<br><br>" + data.name + " 様";
-          } else if (data.alreadyChecked) {
-            statusDiv.className = "already";
-            statusDiv.innerHTML = "⚠️ すでに受付済みです<br><br>" + data.name + " 様";
-          } else {
-            statusDiv.className = "error";
-            statusDiv.innerText = "❌ " + data.message;
-          }
-          setTimeout(() => {
-            statusDiv.className = "";
-            statusDiv.innerText = "かざしてください";
-            isProcessing = false;
-          }, 3000);
-        })
-        .catch(() => {
+      const callbackName = "gasCallback_" + Date.now();
+
+      window[callbackName] = function(data) {
+        if (data.success) {
+          statusDiv.className = "success";
+          statusDiv.innerHTML = "⭕ 受付完了<br><br>" + data.name + " 様";
+        } else if (data.alreadyChecked) {
+          statusDiv.className = "already";
+          statusDiv.innerHTML = "⚠️ すでに受付済みです<br><br>" + data.name + " 様";
+        } else {
           statusDiv.className = "error";
-          statusDiv.innerText = "通信エラーが発生しました";
-          setTimeout(() => {
-            statusDiv.className = "";
-            statusDiv.innerText = "かざしてください";
-            isProcessing = false;
-          }, 3000);
-        });
+          statusDiv.innerText = "❌ " + data.message;
+        }
+
+        delete window[callbackName];
+        const elem = document.getElementById(callbackName);
+        if (elem) elem.remove();
+
+        setTimeout(() => {
+          statusDiv.className = "";
+          statusDiv.innerText = "かざしてください";
+          isProcessing = false;
+        }, 3000);
+      };
+
+      const script = document.createElement("script");
+      script.id = callbackName;
+      script.src = `${GAS_URL}?prefix=${callbackName}&qrData=${encodeURIComponent(qrData)}`;
+      
+      script.onerror = function() {
+        statusDiv.className = "error";
+        statusDiv.innerText = "通信エラー（URLを確認してください）";
+        delete window[callbackName];
+        if (script.parentNode) script.parentNode.removeChild(script);
+        setTimeout(() => {
+          statusDiv.className = "";
+          statusDiv.innerText = "かざしてください";
+          isProcessing = false;
+        }, 3000);
+      };
+
+      document.body.appendChild(script);
     }
   </script>
 </body>
