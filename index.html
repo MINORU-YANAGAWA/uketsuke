@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QR無人受付システム</title>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; text-align: center; margin: 0; padding: 20px; background: #f0f2f5; }
+    h1 { color: #333; font-size: 26px; margin-bottom: 15px; }
+    #reader { width: 100%; max-width: 500px; margin: 0 auto; background: #fff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    
+    #status-box {
+      margin: 20px auto 0; max-width: 500px; padding: 30px 20px; border-radius: 16px;
+      font-size: 24px; font-weight: bold; min-height: 120px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      transition: all 0.3s ease;
+    }
+    .default { background: #ffffff; color: #555; border: 3px dashed #ccc; }
+    .processing { background: #fff3cd; color: #856404; border: 3px solid #ffeeba; }
+    .success { background: #d4edda; color: #155724; border: 3px solid #c3e6cb; }
+    .already { background: #fff3cd; color: #856404; border: 3px solid #ffeeba; }
+    .error { background: #f8d7da; color: #721c24; border: 3px solid #f5c6cb; }
+    
+    .name-display { font-size: 36px; font-weight: bold; margin-top: 10px; color: #111; }
+    .time-display { font-size: 20px; margin-top: 10px; color: #555; }
+    #start-btn { font-size: 22px; padding: 18px 36px; background: #007bff; color: white; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; margin-top: 20px; box-shadow: 0 4px 8px rgba(0,0,0,0.15); }
+  </style>
+</head>
+<body>
+
+  <h1>QR受付システム</h1>
+  
+  <button id="start-btn" onclick="initCamera()">📷 タップしてカメラ起動</button>
+  
+  <div id="reader" style="display:none;"></div>
+  
+  <div id="status-box" class="default">
+    <div id="status-text">ボタンを押してカメラを起動してください</div>
+  </div>
+
+  <script>
+    // ⚠️【必須】ここにSTEP1で取得したGASのWebアプリURLを貼り付けてください！
+    const GAS_URL = "https://script.google.com/a/macros/shizuokaonline.com/s/AKfycbwwRoAkA_e91ujzb-GgKAQPrNXYfE3i2kzlgF33DkdOxqciVe3yvfeiFPK_eBT7hfPB/exec";
+
+    let html5QrCode = null;
+    let isProcessing = false;
+
+    function initCamera() {
+      document.getElementById('start-btn').style.display = 'none';
+      document.getElementById('reader').style.display = 'block';
+      setStatus('default', 'カメラ準備中...');
+
+      html5QrCode = new Html5Qrcode("reader");
+      const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+
+      // 背面カメラで起動
+      html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess)
+        .then(() => {
+          setStatus('default', 'かざしてください');
+        })
+        .catch(err => {
+          // エラー時は前面カメラでリトライ
+          html5QrCode.start({ facingMode: "user" }, config, onScanSuccess)
+            .then(() => setStatus('default', 'かざしてください'))
+            .catch(e => setStatus('error', 'カメラ起動失敗。権限を確認してください'));
+        });
+    }
+
+    function onScanSuccess(decodedText) {
+      if (isProcessing) return;
+      isProcessing = true;
+
+      setStatus('processing', '照合中...');
+
+      // GASのAPIを呼び出す
+      fetch(GAS_URL + "?qrData=" + encodeURIComponent(decodedText))
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            // ⭕ 受付成功
+            setStatus('success', 
+              '受付完了', 
+              `<div class="name-display">${data.name} 様</div><div class="time-display">受付時刻: ${data.time}</div>`
+            );
+          } else if (data.alreadyChecked) {
+            // ⚠️ 二重受付
+            setStatus('already', 
+              'すでに受付済みです', 
+              `<div class="name-display">${data.name} 様</div>`
+            );
+          } else {
+            // ❌ エラー（未登録など）
+            setStatus('error', data.message);
+          }
+
+          // 3秒後に自動で元の待ち受け画面に戻り、次の読み取りを許可する
+          setTimeout(() => {
+            setStatus('default', 'かざしてください');
+            isProcessing = false;
+          }, 3000);
+        })
+        .catch(err => {
+          setStatus('error', '通信エラーが発生しました');
+          setTimeout(() => {
+            setStatus('default', 'かざしてください');
+            isProcessing = false;
+          }, 3000);
+        });
+    }
+
+    function setStatus(type, text, extraHtml = '') {
+      const box = document.getElementById('status-box');
+      box.className = type;
+      box.innerHTML = `<div>${text}</div>` + extraHtml;
+    }
+  </script>
+</body>
+</html>
